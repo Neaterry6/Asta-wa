@@ -1,0 +1,11 @@
+export default {
+  config: {
+    name: '',
+    description: '"',
+    usage: [''],
+    category: 'general',
+  },
+  onRun: async (sock, message) => {
+    await sock.sendMessage(message.key.remoteJid, { text: '' }, { quoted: message });
+  },
+}
