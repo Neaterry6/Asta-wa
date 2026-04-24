@@ -6,11 +6,18 @@ export default {
       "2349139977668@s.whatsapp.net",
       "145917739024404@lid"
     ],
-    "number": "",
+    "number": process.env.BOT_NUMBER || "",
     "status": "online"
   },
     "keys": {
-    "gemini": "AIzaSyClIFnL7w8J_issyCxLGOqXhgPZNVZ4Js4"
+    "gemini": process.env.GEMINI_API_KEY || ""
+  },
+
+  "qwen": {
+    "baseUrl": process.env.QWEN_BASE_URL || "https://qwen.aikit.club",
+    "apiKey": process.env.QWEN_API_KEY || "",
+    "defaultModel": process.env.QWEN_DEFAULT_MODEL || "Qwen3.6-Plus",
+    "assistantName": process.env.QWEN_ASSISTANT_NAME || "Terry"
   },
   "onlyAdminMode": {
     "enabled": false
