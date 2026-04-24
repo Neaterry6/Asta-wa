@@ -203,7 +203,7 @@ global.client = {
   commands: new Map(),
   replies: new Map(),
   config,
-  botadmin: config.adminIds,
+  botadmin: config.bot?.admins || [],
   prefix: config.bot.prefix,
   pairSessions: new Map(),
   activeSessions,
