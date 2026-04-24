@@ -12,6 +12,13 @@ export default {
     "keys": {
     "gemini": "AIzaSyClIFnL7w8J_issyCxLGOqXhgPZNVZ4Js4"
   },
+
+  "qwen": {
+    "baseUrl": "https://qwen.aikit.club",
+    "apiKey": "",
+    "defaultModel": "Qwen3.6-Plus",
+    "assistantName": "Terry"
+  },
   "onlyAdminMode": {
     "enabled": false
   },
