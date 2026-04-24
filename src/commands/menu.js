@@ -48,6 +48,8 @@ if (args.length === 0) {
 ━━━━━━━━━━━━━━━━━━━━━━
 ✨ *Asta Bot — Power. Speed. Control.*
 ⚡ Developed with Baileys
+
+🔗 *Pairing:* `.pair`, `.multipair`
 `;
 
     await sock.sendMessage(

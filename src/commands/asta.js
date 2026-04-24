@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import axios from "axios";
 import config from "../../config.js";
 import {
   getHistory,
@@ -10,6 +11,31 @@ import { setReplyCallback } from "../../handler/replyHandler.js";
 const ai = new GoogleGenAI({
   apiKey: config.keys.gemini
 });
+
+async function qwenChat(messages) {
+  const baseURL = config.qwen?.baseUrl || "https://qwen.aikit.club";
+  const token = process.env.QWEN_API_KEY || config.qwen?.apiKey;
+  if (!token) return null;
+  const model = getCurrentModel();
+  const res = await axios.post(`${baseURL}/v1/chat/completions`, {
+    model,
+    messages
+  }, {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    timeout: 120000
+  });
+  return res.data?.choices?.[0]?.message?.content?.trim() || null;
+}
+
+function getCurrentModel() {
+  try {
+    const fs = require("fs");
+    const data = JSON.parse(fs.readFileSync("data/qwen-model.json", "utf-8"));
+    return data.model || config.qwen?.defaultModel || "Qwen3.6-Plus";
+  } catch {
+    return config.qwen?.defaultModel || "Qwen3.6-Plus";
+  }
+}
 
 const SYSTEM_PROMPT = `
 you are asta bot created by asta ichiyukimori you'll you will act and reply like you're a boss`;
@@ -44,12 +70,18 @@ export default {
         ...getHistory(jid)
       ];
 
-      const res = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents
-      });
+      let aiText = await qwenChat([
+        { role: "system", content: SYSTEM_PROMPT },
+        ...getHistory(jid).map(h => ({ role: h.role === "model" ? "assistant" : h.role, content: h.parts ? h.parts.map(p => p.text).join(" ") : h.content }))
+      ]);
 
-      const aiText = res.text || "⚠️ No response.";
+      if (!aiText) {
+        const res = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents
+        });
+        aiText = res.text || "⚠️ No response.";
+      }
 
       addToHistory(jid, "model", aiText);
 
@@ -69,15 +101,21 @@ export default {
 
         addToHistory(jid, "user", text);
 
-        const followUp = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: [
-            { role: "user", parts: [{ text: SYSTEM_PROMPT }] },
-            ...getHistory(jid)
-          ]
-        });
+        let replyText = await qwenChat([
+          { role: "system", content: SYSTEM_PROMPT },
+          ...getHistory(jid).map(h => ({ role: h.role === "model" ? "assistant" : h.role, content: h.parts ? h.parts.map(p => p.text).join(" ") : h.content }))
+        ]);
 
-        const replyText = followUp.text || "⚠️ No response.";
+        if (!replyText) {
+          const followUp = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+              { role: "user", parts: [{ text: SYSTEM_PROMPT }] },
+              ...getHistory(jid)
+            ]
+          });
+          replyText = followUp.text || "⚠️ No response.";
+        }
 
         addToHistory(jid, "model", replyText);
 
