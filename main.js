@@ -3,7 +3,9 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  Browsers
+  Browsers,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
@@ -17,7 +19,7 @@ import config from './config.js';
 import log from './includes/log.js';
 import { loadPlugins } from './handler/pluginHandler.js';
 import { handleMessage } from './handler/messageHandler.js';
-import { normalizePairNumber, parsePairNumbers } from './includes/phone.js';
+import { cleanNumber, normalizePairNumber, parsePairNumbers } from './includes/phone.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,6 +32,164 @@ const pendingMainNotifications = [];
 const AUTH_ROOT = path.resolve(__dirname, 'cache', 'sessions');
 const SESSION_DB = path.resolve(__dirname, 'cache', 'session-index.json');
 const MAIN_SESSION_ID = 'main';
+const MAIN_AUTH_DIR = path.resolve(__dirname, 'auth_info_baileys');
+
+function getSessionIdentifier() {
+  return String(
+    process.env.SESSION_ID ||
+    process.env.SESSION ||
+    process.env.WA_SESSION_ID ||
+    process.env.ILOMBOT_SESSION_ID ||
+    process.env.SESSION_CREDS_JSON ||
+    process.env.CREDS_JSON ||
+    ''
+  )
+    .trim()
+    .replace(/^['"`]|['"`]$/g, '')
+    .replace(/^SESSION_ID\s*=\s*/i, '')
+    .trim();
+}
+
+async function downloadMegaBuffer(fullMegaUrl) {
+  const { File } = await import('megajs');
+  return new Promise((resolve, reject) => {
+    let file;
+    try {
+      file = File.fromURL(fullMegaUrl);
+    } catch (error) {
+      reject(new Error(`Mega URL parse failed: ${error.message}`));
+      return;
+    }
+
+    file.loadAttributes((error) => {
+      if (error) return reject(new Error(`Mega loadAttributes failed: ${error.message}`));
+      const chunks = [];
+      const stream = file.download();
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', (streamError) => reject(new Error(`Mega download failed: ${streamError.message}`)));
+    });
+  });
+}
+
+async function persistSessionData(rawData, authDir) {
+  const credsPath = path.join(authDir, 'creds.json');
+  const keysPath = path.join(authDir, 'keys');
+  await fs.ensureDir(keysPath);
+  await fs.remove(credsPath).catch(() => {});
+  await fs.emptyDir(keysPath);
+
+  if (Buffer.isBuffer(rawData) && rawData.length > 4 && rawData[0] === 0x50 && rawData[1] === 0x4b) {
+    try {
+      const unzipper = await import('unzipper');
+      const zip = await unzipper.Open.buffer(rawData);
+      for (const entry of zip.files) {
+        if (entry.type !== 'File') continue;
+        const safePath = path.normalize(entry.path).replace(/^(\.\.(\/|\\|$))+/, '');
+        const target = path.join(authDir, safePath);
+        await fs.ensureDir(path.dirname(target));
+        await fs.writeFile(target, await entry.buffer());
+      }
+      const nestedCredsPath = path.join(authDir, 'auth_info_baileys', 'creds.json');
+      if (!await fs.pathExists(credsPath) && await fs.pathExists(nestedCredsPath)) {
+        await fs.copy(nestedCredsPath, credsPath, { overwrite: true });
+      }
+      const nestedKeysPath = path.join(authDir, 'auth_info_baileys', 'keys');
+      if (await fs.pathExists(nestedKeysPath)) {
+        const rootEntries = await fs.readdir(keysPath).catch(() => []);
+        if (!rootEntries.length) {
+          await fs.copy(nestedKeysPath, keysPath, { overwrite: true, errorOnExist: false });
+        }
+      }
+      return await fs.pathExists(credsPath);
+    } catch (error) {
+      log.warn(`Zip session extraction failed: ${error.message}`);
+    }
+  }
+
+  let parsed = rawData;
+  if (Buffer.isBuffer(parsed)) {
+    const text = parsed.toString('utf8').replace(/^\uFEFF/, '').trim();
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      try {
+        parsed = JSON.parse(Buffer.from(text, 'base64').toString('utf8'));
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {}
+  }
+
+  if (parsed?.creds && typeof parsed.creds === 'object') {
+    await fs.writeJson(credsPath, parsed.creds, { spaces: 2 });
+    if (parsed.keys && typeof parsed.keys === 'object') {
+      for (const [keyName, keyData] of Object.entries(parsed.keys)) {
+        if (keyData && typeof keyData === 'object') {
+          await fs.writeJson(path.join(keysPath, `${keyName}.json`), keyData, { spaces: 2 });
+        }
+      }
+    }
+    return true;
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    await fs.writeJson(credsPath, parsed, { spaces: 2 });
+    return true;
+  }
+
+  return false;
+}
+
+async function processMainSessionCredentials() {
+  const sessionId = getSessionIdentifier();
+  if (!sessionId) return false;
+
+  await fs.ensureDir(MAIN_AUTH_DIR);
+  await fs.ensureDir(path.join(MAIN_AUTH_DIR, 'keys'));
+
+  try {
+    if (/^https:\/\/mega\.nz\/(file|folder)\//i.test(sessionId) || /^ilombot--/i.test(sessionId)) {
+      const encoded = sessionId.replace(/^ilombot--/i, '').trim();
+      let megaUrl = sessionId;
+      if (!/^https:\/\/mega\.nz\/(file|folder)\//i.test(sessionId)) {
+        const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+        megaUrl = Buffer.from(normalized, 'base64').toString('utf8').trim();
+      }
+      log.info('Loading SESSION_ID from Mega link...');
+      const fileData = await downloadMegaBuffer(megaUrl);
+      const persisted = await persistSessionData(fileData, MAIN_AUTH_DIR);
+      if (!persisted) throw new Error('Downloaded session is invalid');
+      log.success('Session credentials loaded from Mega.');
+      return true;
+    }
+
+    let sessionData;
+    if (sessionId.startsWith('Ilom~')) {
+      sessionData = JSON.parse(Buffer.from(sessionId.replace('Ilom~', ''), 'base64').toString());
+    } else if (sessionId.startsWith('{')) {
+      sessionData = JSON.parse(sessionId);
+    } else {
+      try {
+        sessionData = JSON.parse(Buffer.from(sessionId, 'base64').toString());
+      } catch {
+        sessionData = JSON.parse(sessionId);
+      }
+    }
+    const persisted = await persistSessionData(sessionData, MAIN_AUTH_DIR);
+    if (!persisted) throw new Error('Session payload could not be parsed');
+    log.success('Session credentials restored from SESSION_ID.');
+    return true;
+  } catch (error) {
+    log.warn(`SESSION_ID restore failed: ${error.message}. Falling back to QR/pairing.`);
+    return false;
+  }
+}
 
 function rlPrompt(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -184,13 +344,23 @@ async function notifyNumberViaMain(number, text, sessionId) {
 async function createSocketForSession(sessionId, authDir, opts = {}) {
   await fs.ensureDir(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { version } = await fetchLatestBaileysVersion();
 
   const socket = makeWASocket({
     logger: pino({ level: 'silent' }),
-    auth: state,
-    browser: Browsers.ubuntu(`Asta-${sessionId}`),
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }).child({ level: 'fatal' }))
+    },
+    browser: typeof Browsers?.ubuntu === 'function' ? Browsers.ubuntu('Chrome') : Browsers.macOS('Chrome'),
     printQRInTerminal: false,
-    markOnlineOnConnect: true
+    markOnlineOnConnect: true,
+    generateHighQualityLinkPreview: false,
+    connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000,
+    retryRequestDelayMs: 250,
+    defaultQueryTimeoutMs: 60000,
+    version
   });
 
   if (opts.pairingOnly) {
@@ -390,9 +560,10 @@ async function loadCommands() {
 async function startBot() {
   await loadCommands();
   await loadPlugins();
+  await processMainSessionCredentials();
 
   const index = await loadSessionIndex();
-  const defaultSessionDir = path.resolve(__dirname, 'auth_info_baileys');
+  const defaultSessionDir = MAIN_AUTH_DIR;
 
   sock = await createSocketForSession('main', defaultSessionDir, {
     onOpen: async (socket, state) => {

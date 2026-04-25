@@ -1,10 +1,15 @@
 import path from 'path';
+import { normalizePairNumber } from '../../includes/phone.js';
 
 function cleanList(args) {
-  return args
+  const tokens = args
     .join(' ')
     .split(/[\s,]+/)
-    .map((n) => n.replace(/[^0-9]/g, ''))
+    .map((n) => n.trim())
+    .filter(Boolean);
+
+  return tokens
+    .map((token) => normalizePairNumber(token) || token.replace(/[^0-9]/g, ''))
     .filter(Boolean);
 }
 
@@ -31,7 +36,8 @@ export default {
       try {
         const authDir = path.resolve('cache/sessions', number);
         const code = await global.client.createPairSession(number, authDir, number);
-        lines.push(`✅ ${number} -> ${code}`);
+        const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
+        lines.push(`✅ ${number} -> ${formatted}`);
       } catch (err) {
         lines.push(`❌ ${number} -> ${err.message}`);
       }
