@@ -1,22 +1,11 @@
 {
-  "name": "ilom-whatsapp-bot",
+  "name": "asta-bot",
   "version": "1.0.0",
-  "description": "🧠 Amazing Bot 🧠 v1 created by Ilom - Advanced Multi-Device WhatsApp Bot with AI, Media Processing, and Comprehensive Features",
+  "description": "ASTA BOT - Multi-device WhatsApp bot with pairing, plugins, and automation features",
   "type": "module",
   "main": "index.js",
-  "author": {
-    "name": "Ilom",
-    "email": "ilom@example.com",
-    "url": "https://ilom.tech"
-  },
-  "contributors": [
-    {
-      "name": "Ilom",
-      "role": "Owner & Lead Developer",
-      "email": "ilom@example.com",
-      "url": "https://ilom.tech"
-    }
-  ],
+  "author": "ASTA BOT",
+  "contributors": [],
   "license": "MIT",
   "directories": {
     "lib": "src",
@@ -48,21 +37,11 @@
     "npm": ">=10"
   },
   "scripts": {
-    "start": "node scripts/bootstrap-start.js",
+    "start": "node index.js",
     "dev": "nodemon index.js",
     "test": "jest --coverage",
     "build": "npm install",
-    "postinstall": "node -e \"const fs=require('fs'); if(fs.existsSync('scripts/postinstall.js')){ require('child_process').execSync('node scripts/postinstall.js', {stdio:'inherit'});} else {console.log('Skipping postinstall: scripts/postinstall.js not available yet');}\"",
-    "setup": "bash scripts/install.sh",
-    "cleanup": "node scripts/cleanup.js",
-    "backup": "bash scripts/backup.sh",
-    "restore": "bash scripts/restore.sh",
-    "migrate": "node scripts/migrate.js",
-    "seed": "node scripts/seed.js",
-    "update": "node scripts/update.js",
-    "update:shell": "bash scripts/update.sh",
-    "debug": "DEBUG=* node index.js",
-    "logs": "pm2 logs ilom-bot"
+    "debug": "DEBUG=* node index.js"
   },
   "dependencies": {
     "@cerebras/cerebras_cloud_sdk": "1.64.1",
