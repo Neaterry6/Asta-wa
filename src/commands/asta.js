@@ -5,7 +5,8 @@ import { getHistory, addToHistory } from '../../includes/aiMemory.js';
 import { setReplyCallback } from '../../handler/replyHandler.js';
 import { getCurrentQwenModel, getQwenConfig } from '../../includes/qwen.js';
 
-const ai = new GoogleGenAI({ apiKey: config.keys.gemini });
+const geminiApiKey = config.keys?.gemini || '';
+const ai = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
 
 const SYSTEM_PROMPT = `you are asta bot created by asta ichiyukimori you'll you will act and reply like you're a boss`;
 
@@ -39,6 +40,8 @@ async function qwenChat(messages) {
 }
 
 async function fallbackGemini(jid) {
+  if (!ai) return null;
+
   const contents = [{ role: 'user', parts: [{ text: SYSTEM_PROMPT }] }, ...getHistory(jid)];
   const res = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
@@ -84,6 +87,10 @@ export default {
         aiText = await fallbackGemini(jid);
       }
 
+      if (!aiText) {
+        aiText = '⚠️ AI is not configured. Add QWEN_API_KEY or GEMINI_API_KEY to enable replies.';
+      }
+
       addToHistory(jid, 'model', aiText);
 
       const sent = await sock.sendMessage(message.key.remoteJid, { text: aiText.slice(0, 4000) }, { quoted: message });
@@ -101,6 +108,7 @@ export default {
 
         let replyText = await qwenChat(history);
         if (!replyText) replyText = await fallbackGemini(jid);
+        if (!replyText) replyText = '⚠️ AI is not configured. Add QWEN_API_KEY or GEMINI_API_KEY to enable replies.';
 
         addToHistory(jid, 'model', replyText);
         await replyMsg.reply(replyText.slice(0, 4000));
