@@ -11,6 +11,7 @@ import figlet from 'figlet';
 import fs from 'fs-extra';
 import path from 'path';
 import readline from 'readline';
+import PhoneNumber from 'awesome-phonenumber';
 import { fileURLToPath } from 'url';
 
 import config from './config.js';
@@ -32,6 +33,40 @@ const MAIN_SESSION_ID = 'main';
 
 function cleanNumber(text = '') {
   return String(text).replace(/[^0-9]/g, '');
+}
+
+function normalizePairNumber(text = '') {
+  const raw = String(text).trim();
+  if (!raw) return '';
+
+  const normalizedInput = raw.startsWith('+') ? raw : `+${cleanNumber(raw)}`;
+  if (!normalizedInput || normalizedInput === '+') return '';
+
+  try {
+    const parsed = new PhoneNumber(normalizedInput);
+    if (!parsed.isValid()) return '';
+    const e164 = parsed.getNumber('e164');
+    return cleanNumber(e164);
+  } catch {
+    return '';
+  }
+}
+
+function parsePairNumbers(input = '') {
+  const tokens = String(input)
+    .split(/[\s,]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  const valid = [];
+  const invalid = [];
+  for (const token of tokens) {
+    const number = normalizePairNumber(token);
+    if (!number) invalid.push(token);
+    else valid.push(number);
+  }
+
+  return { valid: [...new Set(valid)], invalid };
 }
 
 function rlPrompt(question) {
@@ -425,24 +460,37 @@ async function startBot() {
   }
 
   if (process.stdin.isTTY && !process.env.AUTO_PAIR_NUMBER) {
-    const answer = await rlPrompt('Pair numbers (comma-separated) or press enter to skip: ');
+    const answer = await rlPrompt(
+      'Enter WhatsApp number(s) with country code (comma-separated) or press enter to skip: '
+    );
     if (answer) process.env.AUTO_PAIR_NUMBER = answer;
   }
 
+  let numbers = [];
   if (process.env.AUTO_PAIR_NUMBER) {
-    const numbers = String(process.env.AUTO_PAIR_NUMBER)
-      .split(/[\s,]+/)
-      .map(cleanNumber)
-      .filter(Boolean);
+    const parsed = parsePairNumbers(process.env.AUTO_PAIR_NUMBER);
+    numbers = parsed.valid;
+    if (parsed.invalid.length) {
+      log.warn(`Ignoring invalid pair number(s): ${parsed.invalid.join(', ')}`);
+    }
+  } else if (config.bot?.number) {
+    const fallback = normalizePairNumber(config.bot.number);
+    if (fallback) {
+      numbers = [fallback];
+      log.info(`AUTO_PAIR_NUMBER not set. Using BOT_NUMBER fallback (${fallback}).`);
+    } else {
+      log.warn('BOT_NUMBER is set but invalid. Use international format e.g. +2348012345678.');
+    }
+  }
 
-    for (const num of numbers) {
-      try {
-        const authDir = path.join(AUTH_ROOT, num);
-        const code = await createPairSession(num, authDir, num);
-        console.log(`\nPAIR CODE for ${num}: ${code}`);
-      } catch (err) {
-        console.log(`\nPAIR FAILED for ${num}: ${err.message}`);
-      }
+  for (const num of numbers) {
+    try {
+      const authDir = path.join(AUTH_ROOT, num);
+      const code = await createPairSession(num, authDir, num);
+      console.log(`\nPAIR CODE for ${num}: ${code}`);
+      console.log(`Copy this code and pair on WhatsApp Linked Devices.`);
+    } catch (err) {
+      console.log(`\nPAIR FAILED for ${num}: ${err.message}`);
     }
   }
 }
