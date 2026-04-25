@@ -20,6 +20,7 @@ import log from './includes/log.js';
 import { loadPlugins } from './handler/pluginHandler.js';
 import { handleMessage } from './handler/messageHandler.js';
 import { cleanNumber, normalizePairNumber, parsePairNumbers } from './includes/phone.js';
+import { startTelegramPairBot } from './src/services/telegramPairBot.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -645,6 +646,10 @@ async function startBot() {
       console.log(`\nPAIR FAILED for ${num}: ${err.message}`);
     }
   }
+
+  await startTelegramPairBot({
+    createPairSession
+  });
 }
 
 startBot();
