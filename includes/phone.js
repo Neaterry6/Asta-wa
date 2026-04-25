@@ -40,6 +40,12 @@ function normalizePairNumber(text = '') {
   }
 
   if (recovered.size === 1) return [...recovered][0];
+
+  // 3) Last-resort fallback: accept clean international digits if they are
+  // plausibly valid E.164 length. This prevents good numbers from being
+  // rejected when metadata validation fails in some runtimes.
+  if (digits.length >= 10 && digits.length <= 15) return digits;
+
   return '';
 }
 

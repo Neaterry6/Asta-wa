@@ -1,5 +1,6 @@
 import path from 'path';
 import { setReplyCallback } from '../../handler/replyHandler.js';
+import { normalizePairNumber } from '../../includes/phone.js';
 
 function senderJid(message) {
   return message.key.participantAlt || message.key.participant || message.key.remoteJid;
@@ -20,14 +21,15 @@ export default {
   },
 
   onRun: async (sock, message, args) => {
-    let number = cleanNumber(args.join(' '));
+    const input = args.join(' ');
+    let number = normalizePairNumber(input) || cleanNumber(input);
     const chat = message.key.remoteJid;
 
     if (!number) {
       const sent = await sock.sendMessage(chat, { text: '📱 Reply with number including country code (example: 2349xxxxxxx)' }, { quoted: message });
       return setReplyCallback(sent.key.id, senderJid(message), async (_sock, replyMsg) => {
         const body = replyMsg.message?.conversation || replyMsg.message?.extendedTextMessage?.text || '';
-        const num = cleanNumber(body);
+        const num = normalizePairNumber(body) || cleanNumber(body);
         if (!num) return replyMsg.reply('❌ Invalid number.');
         await startPair(replyMsg, num);
       });
@@ -43,7 +45,8 @@ async function startPair(message, number) {
   try {
     await message.reply(`⏳ Creating pairing code for ${number}...`);
     const code = await global.client.createPairSession(number, authDir, number);
-    await message.reply(`🔐 Pair code for ${number}: *${code}*\nUse this code in WhatsApp linked devices.`);
+    const formatted = code?.match(/.{1,4}/g)?.join('-') || code;
+    await message.reply(`🔐 Pair code for ${number}: *${formatted}*\nUse this code in WhatsApp linked devices.`);
   } catch (error) {
     await message.reply(`❌ Pairing failed for ${number}: ${error.message}`);
   }
