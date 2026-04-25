@@ -33,6 +33,7 @@ const AUTH_ROOT = path.resolve(__dirname, 'cache', 'sessions');
 const SESSION_DB = path.resolve(__dirname, 'cache', 'session-index.json');
 const MAIN_SESSION_ID = 'main';
 const MAIN_AUTH_DIR = path.resolve(__dirname, 'auth_info_baileys');
+const ENABLE_PAIRING_PROMPT = String(process.env.ENABLE_PAIRING_PROMPT || '').toLowerCase() === 'true';
 
 function getSessionIdentifier() {
   return String(
@@ -370,7 +371,7 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
   socket.ev.on('creds.update', saveCreds);
 
   socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr && !opts.pairingOnly) {
+    if (qr && !opts.pairingOnly && !opts.suppressQR) {
       console.log(`\n[${sessionId}] Scan this QR to login:`);
       qrcode.generate(qr, { small: true });
     }
@@ -562,10 +563,35 @@ async function startBot() {
   await loadPlugins();
   await processMainSessionCredentials();
 
+  if (process.stdin.isTTY && ENABLE_PAIRING_PROMPT && !process.env.AUTO_PAIR_NUMBER) {
+    const answer = await rlPrompt(
+      'Enter WhatsApp number(s) with country code (comma-separated) or press enter to skip: '
+    );
+    if (answer) process.env.AUTO_PAIR_NUMBER = answer;
+  }
+
+  let numbers = [];
+  if (process.env.AUTO_PAIR_NUMBER) {
+    const parsed = parsePairNumbers(process.env.AUTO_PAIR_NUMBER);
+    numbers = parsed.valid;
+    if (parsed.invalid.length) {
+      log.warn(`Ignoring invalid pair number(s): ${parsed.invalid.join(', ')}`);
+    }
+  } else if (config.bot?.number) {
+    const fallback = normalizePairNumber(config.bot.number);
+    if (fallback) {
+      numbers = [fallback];
+      log.info(`AUTO_PAIR_NUMBER not set. Using BOT_NUMBER fallback (${fallback}).`);
+    } else {
+      log.warn('BOT_NUMBER is set but invalid. Use international format e.g. +2348012345678.');
+    }
+  }
+
   const index = await loadSessionIndex();
   const defaultSessionDir = MAIN_AUTH_DIR;
 
   sock = await createSocketForSession('main', defaultSessionDir, {
+    suppressQR: ENABLE_PAIRING_PROMPT,
     onOpen: async (socket, state) => {
       const connected = state?.creds?.me?.id || 'unknown';
       figlet('BOT ONLINE', (err, data) => {
@@ -592,27 +618,16 @@ async function startBot() {
     });
   }
 
-  if (process.stdin.isTTY && !process.env.AUTO_PAIR_NUMBER) {
-    const answer = await rlPrompt(
-      'Enter WhatsApp number(s) with country code (comma-separated) or press enter to skip: '
-    );
-    if (answer) process.env.AUTO_PAIR_NUMBER = answer;
-  }
-
-  let numbers = [];
-  if (process.env.AUTO_PAIR_NUMBER) {
-    const parsed = parsePairNumbers(process.env.AUTO_PAIR_NUMBER);
-    numbers = parsed.valid;
-    if (parsed.invalid.length) {
-      log.warn(`Ignoring invalid pair number(s): ${parsed.invalid.join(', ')}`);
-    }
-  } else if (config.bot?.number) {
-    const fallback = normalizePairNumber(config.bot.number);
-    if (fallback) {
-      numbers = [fallback];
-      log.info(`AUTO_PAIR_NUMBER not set. Using BOT_NUMBER fallback (${fallback}).`);
-    } else {
-      log.warn('BOT_NUMBER is set but invalid. Use international format e.g. +2348012345678.');
+  if (ENABLE_PAIRING_PROMPT && numbers.length) {
+    const [mainNumber, ...extraNumbers] = numbers;
+    try {
+      const code = await global.client.requestPairCode(mainNumber, 'main');
+      console.log(`\nMAIN PAIR CODE for ${mainNumber}: ${code}`);
+      console.log('Copy this code and pair on WhatsApp Linked Devices.');
+      numbers = extraNumbers;
+    } catch (err) {
+      log.warn(`Failed generating main pair code for ${mainNumber}: ${err.message}`);
+      numbers = [mainNumber, ...extraNumbers];
     }
   }
 

@@ -1,7 +1,7 @@
 export default {
   "bot": {
-    "name": "Asta Bot",
-    "prefix": ".",
+    "name": process.env.BOT_NAME || "Asta Bot",
+    "prefix": process.env.PREFIX || ".",
     "admins": [
       "2349139977668@s.whatsapp.net",
       "145917739024404@lid"
@@ -14,17 +14,10 @@ export default {
   },
 
   "qwen": {
-    "baseUrl": process.env.QWEN_BASE_URL || "https://qwen.aikit.club",
-    "apiKey": process.env.QWEN_API_KEY || "",
+    "baseUrl": process.env.QWEN_API_BASE_URL || process.env.QWEN_BASE_URL || "https://qwen.aikit.club",
+    "apiKey": process.env.QWEN_API_TOKEN || process.env.QWEN_TOKEN || process.env.QWEN_API_KEY || "",
     "defaultModel": process.env.QWEN_DEFAULT_MODEL || "Qwen3.6-Plus",
     "assistantName": process.env.QWEN_ASSISTANT_NAME || "Terry"
-  },
-
-  "qwen": {
-    "baseUrl": "https://qwen.aikit.club",
-    "apiKey": "",
-    "defaultModel": "Qwen3.6-Plus",
-    "assistantName": "Terry"
   },
   "onlyAdminMode": {
     "enabled": false
