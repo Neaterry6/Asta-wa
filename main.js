@@ -473,7 +473,7 @@ async function requestPairingCodeWithRetry(number, authDir, notifyNumber, retrie
         });
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       const code = await sessionSock.requestPairingCode(number);
       return code;
     } catch (error) {
@@ -481,8 +481,10 @@ async function requestPairingCodeWithRetry(number, authDir, notifyNumber, retrie
       log.warn(`[${number}] Pairing code attempt ${attempt}/${retries} failed: ${error.message}`);
       pairSessions.delete(number);
       activeSessions.delete(number);
+      await fs.remove(authDir).catch(() => {});
+      await fs.ensureDir(authDir);
       if (attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await new Promise((resolve) => setTimeout(resolve, 1800));
       }
     }
   }
@@ -495,18 +497,13 @@ async function createPairSession(sessionId, authDir, notifyNumber = '') {
   if (!number) throw new Error('invalid session id');
 
   await registerSessionMeta(number, authDir, notifyNumber || number);
-  await notifyNumberViaMain(
-    notifyNumber || number,
-    `⏳ Pairing has started for ${number}. Keep WhatsApp online while we generate your link code.`,
-    number
-  );
 
   const code = await requestPairingCodeWithRetry(number, authDir, notifyNumber || number);
 
   await notifyAdmins(`🔐 Pair code created for ${number}: ${code}`);
   await notifyNumberViaMain(
     notifyNumber || number,
-    `🔐 Pairing code generated for ${number}. Use the code shown in the bot/admin console to finish linking.`,
+    `🔐 Pairing code generated for ${number}: ${code}. Use this in WhatsApp Linked Devices.`,
     number
   );
 
