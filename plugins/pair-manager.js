@@ -1,6 +1,7 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { normalizePairNumber } from '../includes/phone.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SESSIONS_DIR = path.resolve(__dirname, '../cache/sessions');
@@ -25,10 +26,6 @@ async function notifyAdmin(sock, text) {
   try {
     await sock.sendMessage(admin, { text });
   } catch {}
-}
-
-function normalizeNumber(input) {
-  return String(input || '').replace(/[^0-9]/g, '');
 }
 
 export default {
@@ -69,7 +66,7 @@ export default {
     }
 
     if (mode === 'remove') {
-      const num = normalizeNumber(args[1]);
+      const num = normalizePairNumber(args[1]);
       if (!num) {
         await sock.sendMessage(ctx.chat, { text: '⚠️ provide a number to remove' }, { quoted: message });
         return false;
@@ -84,8 +81,8 @@ export default {
     }
 
     const numbers = mode === 'multipair'
-      ? args.slice(1).map(normalizeNumber).filter(Boolean)
-      : [normalizeNumber(args[0])].filter(Boolean);
+      ? args.slice(1).map(normalizePairNumber).filter(Boolean)
+      : [normalizePairNumber(args[0])].filter(Boolean);
 
     if (!numbers.length) {
       await sock.sendMessage(ctx.chat, { text: '⚠️ no valid phone number provided' }, { quoted: message });

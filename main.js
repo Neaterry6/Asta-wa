@@ -11,13 +11,13 @@ import figlet from 'figlet';
 import fs from 'fs-extra';
 import path from 'path';
 import readline from 'readline';
-import PhoneNumber from 'awesome-phonenumber';
 import { fileURLToPath } from 'url';
 
 import config from './config.js';
 import log from './includes/log.js';
 import { loadPlugins } from './handler/pluginHandler.js';
 import { handleMessage } from './handler/messageHandler.js';
+import { normalizePairNumber, parsePairNumbers } from './includes/phone.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -30,44 +30,6 @@ const pendingMainNotifications = [];
 const AUTH_ROOT = path.resolve(__dirname, 'cache', 'sessions');
 const SESSION_DB = path.resolve(__dirname, 'cache', 'session-index.json');
 const MAIN_SESSION_ID = 'main';
-
-function cleanNumber(text = '') {
-  return String(text).replace(/[^0-9]/g, '');
-}
-
-function normalizePairNumber(text = '') {
-  const raw = String(text).trim();
-  if (!raw) return '';
-
-  const normalizedInput = raw.startsWith('+') ? raw : `+${cleanNumber(raw)}`;
-  if (!normalizedInput || normalizedInput === '+') return '';
-
-  try {
-    const parsed = new PhoneNumber(normalizedInput);
-    if (!parsed.isValid()) return '';
-    const e164 = parsed.getNumber('e164');
-    return cleanNumber(e164);
-  } catch {
-    return '';
-  }
-}
-
-function parsePairNumbers(input = '') {
-  const tokens = String(input)
-    .split(/[\s,]+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
-
-  const valid = [];
-  const invalid = [];
-  for (const token of tokens) {
-    const number = normalizePairNumber(token);
-    if (!number) invalid.push(token);
-    else valid.push(number);
-  }
-
-  return { valid: [...new Set(valid)], invalid };
-}
 
 function rlPrompt(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
