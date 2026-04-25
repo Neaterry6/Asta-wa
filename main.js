@@ -25,6 +25,7 @@ let sock;
 const activeSessions = new Map();
 const pairSessions = new Map();
 const reconnectTimers = new Map();
+const pendingMainNotifications = [];
 const AUTH_ROOT = path.resolve(__dirname, 'cache', 'sessions');
 const SESSION_DB = path.resolve(__dirname, 'cache', 'session-index.json');
 const MAIN_SESSION_ID = 'main';
@@ -140,13 +141,36 @@ async function waitForMainSocketReady(timeoutMs = 15000) {
   });
 }
 
+
+function queueMainNotification(number, text, sessionId) {
+  pendingMainNotifications.push({ number: cleanNumber(number), text, sessionId, createdAt: Date.now() });
+}
+
+async function flushMainNotifications() {
+  if (!pendingMainNotifications.length) return;
+  const mainSock = await waitForMainSocketReady(5000);
+  if (!mainSock) return;
+
+  const queued = pendingMainNotifications.splice(0, pendingMainNotifications.length);
+  for (const item of queued) {
+    if (!item.number || !item.text) continue;
+    try {
+      await mainSock.sendMessage(`${item.number}@s.whatsapp.net`, { text: item.text });
+      log.info(`[${item.sessionId}] Queued pairing notification delivered to ${item.number}.`);
+    } catch (error) {
+      log.warn(`[${item.sessionId}] Could not deliver queued notification to ${item.number}: ${error.message}`);
+    }
+  }
+}
+
 async function notifyNumberViaMain(number, text, sessionId) {
   const clean = cleanNumber(number);
   if (!clean) return false;
 
   const mainSock = await waitForMainSocketReady();
   if (!mainSock) {
-    log.warn(`[${sessionId}] Cannot notify ${clean}: main session is not connected yet.`);
+    queueMainNotification(clean, text, sessionId);
+    log.warn(`[${sessionId}] Main session not connected yet. Notification queued for ${clean}.`);
     return false;
   }
 
@@ -202,6 +226,7 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
       }
 
       await notifyAdmins(`✅ Session opened: ${sessionId}${notifyNumber ? ` (${notifyNumber})` : ''}`);
+      await flushMainNotifications();
 
       if (typeof opts.onOpen === 'function') {
         try {
@@ -217,8 +242,9 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
       activeSessions.delete(sessionId);
       if (pairSessions.get(sessionId) === socket) pairSessions.delete(sessionId);
       if (code !== DisconnectReason.loggedOut) {
-        if (opts.pairingOnly && code === 405) {
-          log.info(`[${sessionId}] Pair code sent. Waiting for account to link...`);
+        if (code === 405) {
+          log.info(`[${sessionId}] Connection closed with 405 (pairing handshake complete). Waiting before reconnect...`);
+          scheduleReconnect(sessionId, authDir, opts, 7000);
           return;
         }
         log.warn(`[${sessionId}] Connection lost (${code || 'unknown'}). Reconnecting...`);

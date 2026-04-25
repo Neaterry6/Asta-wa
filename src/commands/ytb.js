@@ -1,10 +1,24 @@
 import axios from 'axios';
-import yts from 'yt-search';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { downloadMedia } from '../../plugins/mediaDownloader.js';
 import { setReplyCallback } from '../../handler/replyHandler.js';
+
+let ytsSearch = null;
+
+async function searchYoutube(query) {
+  if (!ytsSearch) {
+    try {
+      const mod = await import('yt-search');
+      ytsSearch = mod.default || mod;
+    } catch {
+      throw new Error('yt-search package missing. Install dependencies with npm install.');
+    }
+  }
+
+  return ytsSearch(query);
+}
 
 function senderJid(message) {
   return message.key.participantAlt || message.key.participant || message.key.remoteJid;
@@ -67,7 +81,7 @@ export default {
     }
 
     await message.reply(`🔍 searching YouTube for: ${query}`);
-    const search = await yts(query);
+    const search = await searchYoutube(query);
     const videos = search.videos.slice(0, 5);
     if (!videos.length) return message.reply('No results found.');
 
