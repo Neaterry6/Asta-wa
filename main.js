@@ -371,6 +371,7 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
   socket.ev.on('creds.update', saveCreds);
 
   socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    const disconnectCode = lastDisconnect?.error?.output?.statusCode ?? lastDisconnect?.error?.output?.payload?.statusCode;
     if (qr && !opts.pairingOnly && !opts.suppressQR) {
       console.log(`\n[${sessionId}] Scan this QR to login:`);
       qrcode.generate(qr, { small: true });
@@ -406,21 +407,27 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
     }
 
     if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
       activeSessions.delete(sessionId);
       if (pairSessions.get(sessionId) === socket) pairSessions.delete(sessionId);
-      if (code !== DisconnectReason.loggedOut) {
-        if (code === 405) {
-          log.info(`[${sessionId}] Connection closed with 405 (pairing handshake complete). Waiting before reconnect...`);
-          scheduleReconnect(sessionId, authDir, opts, 7000);
-          return;
-        }
-        log.warn(`[${sessionId}] Connection lost (${code || 'unknown'}). Reconnecting...`);
-        scheduleReconnect(sessionId, authDir, opts);
-      } else {
+
+      if (disconnectCode === DisconnectReason.loggedOut) {
         clearReconnectTimer(sessionId);
-        log.error(`[${sessionId}] Logged out. Remove auth folder and pair again.`);
+        if (opts.pairingOnly) {
+          log.info(`[${sessionId}] Pairing socket closed after code generation/loggedOut.`);
+        } else {
+          log.error(`[${sessionId}] Logged out. Remove auth folder and pair again.`);
+        }
+        return;
       }
+
+      if (disconnectCode === 405) {
+        log.info(`[${sessionId}] Connection closed with 405 (pairing handshake complete). Waiting before reconnect...`);
+        scheduleReconnect(sessionId, authDir, opts, 7000);
+        return;
+      }
+
+      log.warn(`[${sessionId}] Connection lost (${disconnectCode || 'unknown'}). Reconnecting...`);
+      scheduleReconnect(sessionId, authDir, opts);
     }
   });
 
