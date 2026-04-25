@@ -1,12 +1,7 @@
-import { GoogleGenAI } from '@google/genai';
 import axios from 'axios';
-import config from '../../config.js';
 import { getHistory, addToHistory } from '../../includes/aiMemory.js';
 import { setReplyCallback } from '../../handler/replyHandler.js';
 import { getCurrentQwenModel, getQwenConfig } from '../../includes/qwen.js';
-
-const geminiApiKey = config.keys?.gemini || '';
-const ai = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
 
 const SYSTEM_PROMPT = `you are asta bot created by asta ichiyukimori you'll you will act and reply like you're a boss`;
 
@@ -39,22 +34,11 @@ async function qwenChat(messages) {
   return res.data?.choices?.[0]?.message?.content?.trim() || null;
 }
 
-async function fallbackGemini(jid) {
-  if (!ai) return null;
-
-  const contents = [{ role: 'user', parts: [{ text: SYSTEM_PROMPT }] }, ...getHistory(jid)];
-  const res = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents
-  });
-  return res.text || '⚠️ No response.';
-}
-
 export default {
   config: {
     name: 'asta',
     aliases: ['asta-kun', 'astabot', 'asta-bot', 'terry'],
-    description: 'Chat with Terry AI (Qwen first, Gemini fallback)',
+    description: 'Chat with Terry AI (Qwen token)',
     usage: ['.asta <message>', '.asta help'],
     category: 'ai'
   },
@@ -69,7 +53,7 @@ export default {
           `• .models → list Qwen models\n` +
           `• .models set <name> → switch model\n` +
           `• .models current → show selected model\n\n` +
-          `Flow: Qwen first, Gemini fallback if Qwen fails or is not configured.`
+          `Flow: Qwen token only. Set QWEN_API_KEY to enable replies.`
       );
     }
 
@@ -83,12 +67,9 @@ export default {
       ];
 
       let aiText = await qwenChat(openAiMessages);
-      if (!aiText) {
-        aiText = await fallbackGemini(jid);
-      }
 
       if (!aiText) {
-        aiText = '⚠️ AI is not configured. Add QWEN_API_KEY or GEMINI_API_KEY to enable replies.';
+        aiText = '⚠️ Qwen is not configured. Add QWEN_API_KEY to enable replies.';
       }
 
       addToHistory(jid, 'model', aiText);
@@ -107,8 +88,7 @@ export default {
         ];
 
         let replyText = await qwenChat(history);
-        if (!replyText) replyText = await fallbackGemini(jid);
-        if (!replyText) replyText = '⚠️ AI is not configured. Add QWEN_API_KEY or GEMINI_API_KEY to enable replies.';
+        if (!replyText) replyText = '⚠️ Qwen is not configured. Add QWEN_API_KEY to enable replies.';
 
         addToHistory(jid, 'model', replyText);
         await replyMsg.reply(replyText.slice(0, 4000));
