@@ -7,10 +7,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 function start() {
-  const bot = spawn("node", ["main.js"], {
+  const bot = spawn(process.execPath, ["main.js"], {
     cwd: __dirname,
     stdio: "inherit",
-    shell: true,
+    shell: false,
   });
 
   bot.on("close", (code) => {

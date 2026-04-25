@@ -23,8 +23,11 @@ const __dirname = path.dirname(__filename);
 
 let sock;
 const activeSessions = new Map();
+const pairSessions = new Map();
+const reconnectTimers = new Map();
 const AUTH_ROOT = path.resolve(__dirname, 'cache', 'sessions');
 const SESSION_DB = path.resolve(__dirname, 'cache', 'session-index.json');
+const MAIN_SESSION_ID = 'main';
 
 function cleanNumber(text = '') {
   return String(text).replace(/[^0-9]/g, '');
@@ -76,6 +79,87 @@ async function notifyAdmins(text) {
   }
 }
 
+function clearReconnectTimer(sessionId) {
+  const timer = reconnectTimers.get(sessionId);
+  if (!timer) return;
+  clearTimeout(timer);
+  reconnectTimers.delete(sessionId);
+}
+
+function scheduleReconnect(sessionId, authDir, opts = {}, delay = 3000) {
+  if (reconnectTimers.has(sessionId)) return;
+  const timer = setTimeout(async () => {
+    reconnectTimers.delete(sessionId);
+    try {
+      await createSocketForSession(sessionId, authDir, opts);
+    } catch (error) {
+      log.warn(`[${sessionId}] Reconnect failed: ${error.message}`);
+      scheduleReconnect(sessionId, authDir, opts, delay);
+    }
+  }, delay);
+  reconnectTimers.set(sessionId, timer);
+}
+
+function getMainSocket() {
+  return activeSessions.get(MAIN_SESSION_ID) || sock || global.client?.mainSocket || null;
+}
+
+async function waitForMainSocketReady(timeoutMs = 15000) {
+  const existing = getMainSocket();
+  if (existing?.user?.id) return existing;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId;
+
+    const finish = (socket = null) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      resolve(socket);
+    };
+
+    const socket = getMainSocket();
+    if (!socket) {
+      finish(null);
+      return;
+    }
+
+    const onUpdate = ({ connection }) => {
+      if (connection === 'open') {
+        socket.ev.off('connection.update', onUpdate);
+        finish(socket);
+      }
+    };
+
+    socket.ev.on('connection.update', onUpdate);
+    timeoutId = setTimeout(() => {
+      socket.ev.off('connection.update', onUpdate);
+      finish(socket.user?.id ? socket : null);
+    }, timeoutMs);
+  });
+}
+
+async function notifyNumberViaMain(number, text, sessionId) {
+  const clean = cleanNumber(number);
+  if (!clean) return false;
+
+  const mainSock = await waitForMainSocketReady();
+  if (!mainSock) {
+    log.warn(`[${sessionId}] Cannot notify ${clean}: main session is not connected yet.`);
+    return false;
+  }
+
+  try {
+    await mainSock.sendMessage(`${clean}@s.whatsapp.net`, { text });
+    log.info(`[${sessionId}] Pairing notification sent to ${clean}.`);
+    return true;
+  } catch (error) {
+    log.warn(`[${sessionId}] Could not notify ${clean}: ${error.message}`);
+    return false;
+  }
+}
+
 async function createSocketForSession(sessionId, authDir, opts = {}) {
   await fs.ensureDir(authDir);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
@@ -88,6 +172,10 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
     markOnlineOnConnect: true
   });
 
+  if (opts.pairingOnly) {
+    pairSessions.set(sessionId, socket);
+  }
+
   socket.ev.on('creds.update', saveCreds);
 
   socket.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
@@ -97,7 +185,9 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
     }
 
     if (connection === 'open') {
+      clearReconnectTimer(sessionId);
       activeSessions.set(sessionId, socket);
+      pairSessions.delete(sessionId);
       log.success(`[${sessionId}] WhatsApp connected`);
 
       const notifyNumber = cleanNumber(opts.notifyNumber || '');
@@ -125,10 +215,16 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       activeSessions.delete(sessionId);
+      if (pairSessions.get(sessionId) === socket) pairSessions.delete(sessionId);
       if (code !== DisconnectReason.loggedOut) {
-        log.warn(`[${sessionId}] Connection lost. Reconnecting...`);
-        setTimeout(() => createSocketForSession(sessionId, authDir, opts), 3000);
+        if (opts.pairingOnly && code === 405) {
+          log.info(`[${sessionId}] Pair code sent. Waiting for account to link...`);
+          return;
+        }
+        log.warn(`[${sessionId}] Connection lost (${code || 'unknown'}). Reconnecting...`);
+        scheduleReconnect(sessionId, authDir, opts);
       } else {
+        clearReconnectTimer(sessionId);
         log.error(`[${sessionId}] Logged out. Remove auth folder and pair again.`);
       }
     }
@@ -171,30 +267,54 @@ async function createSocketForSession(sessionId, authDir, opts = {}) {
   return socket;
 }
 
+async function requestPairingCodeWithRetry(number, authDir, notifyNumber, retries = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      let sessionSock = pairSessions.get(number) || activeSessions.get(number);
+      if (!sessionSock) {
+        sessionSock = await createSocketForSession(number, authDir, {
+          notifyNumber,
+          pairingOnly: true
+        });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const code = await sessionSock.requestPairingCode(number);
+      return code;
+    } catch (error) {
+      lastError = error;
+      log.warn(`[${number}] Pairing code attempt ${attempt}/${retries} failed: ${error.message}`);
+      pairSessions.delete(number);
+      activeSessions.delete(number);
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+    }
+  }
+
+  throw new Error(lastError?.message || 'failed to create pairing code');
+}
+
 async function createPairSession(sessionId, authDir, notifyNumber = '') {
   const number = cleanNumber(sessionId);
   if (!number) throw new Error('invalid session id');
 
   await registerSessionMeta(number, authDir, notifyNumber || number);
+  await notifyNumberViaMain(
+    notifyNumber || number,
+    `⏳ Pairing has started for ${number}. Keep WhatsApp online while we generate your link code.`,
+    number
+  );
 
-  let sessionSock = activeSessions.get(number);
-  if (!sessionSock) {
-    sessionSock = await createSocketForSession(number, authDir, {
-      notifyNumber: notifyNumber || number,
-      pairingOnly: true
-    });
-  }
-
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  const code = await sessionSock.requestPairingCode(number);
+  const code = await requestPairingCodeWithRetry(number, authDir, notifyNumber || number);
 
   await notifyAdmins(`🔐 Pair code created for ${number}: ${code}`);
-
-  try {
-    await sock.sendMessage(`${number}@s.whatsapp.net`, {
-      text: `🔐 Pairing started for *${number}*. Use the code shown in the panel console or admin command reply.`
-    });
-  } catch {}
+  await notifyNumberViaMain(
+    notifyNumber || number,
+    `🔐 Pairing code generated for ${number}. Use the code shown in the bot/admin console to finish linking.`,
+    number
+  );
 
   return code;
 }
@@ -205,7 +325,7 @@ global.client = {
   config,
   botadmin: config.bot?.admins || [],
   prefix: config.bot.prefix,
-  pairSessions: new Map(),
+  pairSessions,
   activeSessions,
   sessionIndexPath: SESSION_DB,
   mainSocket: null,
